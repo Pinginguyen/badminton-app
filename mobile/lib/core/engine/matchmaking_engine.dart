@@ -205,7 +205,11 @@ class BadmintonMatchmakingEngine {
 
   static void _validateCourtNumber(int? courtNumber) {
     if (courtNumber != null && (courtNumber < 1 || courtNumber > 3)) {
-      throw ArgumentError.value(courtNumber, 'courtNumber', 'Must be from 1 to 3.');
+      throw ArgumentError.value(
+        courtNumber,
+        'courtNumber',
+        'Must be from 1 to 3.',
+      );
     }
   }
 
@@ -216,9 +220,7 @@ class BadmintonMatchmakingEngine {
   }
 
   static List<int> _setsPlayedRank(List<MatchPlayer> quartet) {
-    final values = quartet
-        .map((player) => player.setsPlayed)
-        .toList()
+    final values = quartet.map((player) => player.setsPlayed).toList()
       ..sort();
     return values;
   }
@@ -480,12 +482,14 @@ class _Candidate implements Comparable<_Candidate> {
     if (gapComparison != 0) return gapComparison;
 
     final partnerRepeatComparison =
-      repeatedPartnerCount.compareTo(other.repeatedPartnerCount);
+        repeatedPartnerCount.compareTo(other.repeatedPartnerCount);
     if (partnerRepeatComparison != 0) return partnerRepeatComparison;
-    final repeatComparison = repeatedPairCount.compareTo(other.repeatedPairCount);
+    final repeatComparison =
+        repeatedPairCount.compareTo(other.repeatedPairCount);
     if (repeatComparison != 0) return repeatComparison;
     final skillComparison =
-        _teamSkillDelta(teamA, teamB).compareTo(_teamSkillDelta(other.teamA, other.teamB));
+        _teamSkillDelta(teamA, teamB)
+            .compareTo(_teamSkillDelta(other.teamA, other.teamB));
     if (skillComparison != 0) return skillComparison;
 
     final thisIds = [...teamA, ...teamB].map((player) => player.id).join('|');

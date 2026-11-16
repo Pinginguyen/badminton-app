@@ -132,14 +132,14 @@ class _TournamentScreenState extends State<TournamentScreen> {
           roundLabel: _roundName(firstRoundCount),
           teamA: firstRoundTeams[index * 2],
           teamB: firstRoundTeams[index * 2 + 1],
-            winner: firstRoundTeams[index * 2] == 'BYE' &&
+          winner: firstRoundTeams[index * 2] == 'BYE' &&
                 firstRoundTeams[index * 2 + 1] == 'BYE'
               ? null
               : firstRoundTeams[index * 2] == 'BYE'
-                ? firstRoundTeams[index * 2 + 1]
-                : firstRoundTeams[index * 2 + 1] == 'BYE'
-                  ? firstRoundTeams[index * 2]
-                  : null,
+                  ? firstRoundTeams[index * 2 + 1]
+                  : firstRoundTeams[index * 2 + 1] == 'BYE'
+                      ? firstRoundTeams[index * 2]
+                      : null,
         ),
     ]);
     var matchCount = firstRoundCount;

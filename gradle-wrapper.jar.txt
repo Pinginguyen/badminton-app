@@ -1,0 +1,8 @@
+$targetDir = "E:\cầu lông\mobile\android\gradle\wrapper"
+New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+$jarSource = (Get-ChildItem -Path "E:\flutter", "C:\Users\Trung Chau PC\.shorebird" -Filter "gradle-wrapper.jar" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+if ($jarSource) {
+    Copy-Item -Path $jarSource -Destination "$targetDir\gradle-wrapper.jar" -Force
+} else {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/flutter/flutter/master/packages/flutter_tools/templates/app_shared/android.tmpl/gradle/wrapper/gradle-wrapper.jar" -OutFile "$targetDir\gradle-wrapper.jar"
+}

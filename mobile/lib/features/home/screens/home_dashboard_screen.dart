@@ -1181,12 +1181,14 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                 ..sort((first, second) => second.value.compareTo(first.value));
               final bestPartner =
                   rankedPartners.isEmpty ? null : rankedPartners.first;
-                  final partner = bestPartner == null
-                    ? <_HubPlayer>[]
-                    : _players.where((item) => item.id == bestPartner.key).toList();
+              final partner = bestPartner == null
+                  ? <_HubPlayer>[]
+                  : _players
+                      .where((item) => item.id == bestPartner.key)
+                      .toList();
               final partnerName = bestPartner == null
                   ? 'Chưa có trận thắng chung'
-                    : '${partner.isEmpty ? 'Đã rời nhóm' : partner.first.name} '
+                  : '${partner.isEmpty ? 'Đã rời nhóm' : partner.first.name} '
                       '(${bestPartner.value})';
 
               return Card(

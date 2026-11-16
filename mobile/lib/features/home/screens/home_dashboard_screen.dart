@@ -2555,3 +2555,4 @@ class _QrBillLine extends StatelessWidget {
     );
   }
 }
+

@@ -191,11 +191,13 @@ class _TournamentScreenState extends State<TournamentScreen> {
               child: Text('${match.roundLabel} · Chọn đội thắng'),
             ),
             for (final team in [match.teamA, match.teamB])
-              ListTile(
-                minHeight: 56,
-                title: Text(team),
-                trailing: const Icon(Icons.emoji_events_outlined),
-                onTap: () => Navigator.of(context).pop(team),
+              ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 56),
+                child: ListTile(
+                  title: Text(team),
+                  trailing: const Icon(Icons.emoji_events_outlined),
+                  onTap: () => Navigator.of(context).pop(team),
+                ),
               ),
           ],
         ),

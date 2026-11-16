@@ -1370,7 +1370,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
               ),
             ),
         ],
-        if (_bankAccount == null)
+        if (_bankAccount == null) ...[
           Padding(
             padding: const EdgeInsets.only(top: 10),
             child: Text(
@@ -1382,6 +1382,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
                   ),
             ),
           ),
+        ],
       ],
     );
   }

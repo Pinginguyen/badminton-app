@@ -42,6 +42,7 @@ class VietQrDialog extends StatelessWidget {
             const SizedBox(height: 12),
             _BillLine(label: 'Tiền sân', amountVnd: bill.courtShareVnd),
             _BillLine(label: 'Tiền cầu', amountVnd: bill.shuttleShareVnd),
+            _BillLine(label: 'Phụ phí chung', amountVnd: bill.extraShareVnd),
             _BillLine(label: 'Phạt trễ', amountVnd: bill.lateFeeVnd),
             const SizedBox(height: 16),
             DecoratedBox(

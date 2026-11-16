@@ -55,4 +55,56 @@ void main() {
           secondBill.lateFeeVnd,
     );
   });
+
+  test('split mode divides extra costs equally or by sets played', () {
+    final startsAt = DateTime(2026, 11, 15);
+    SessionModel createSession(BillSplitMode splitMode) => SessionModel(
+          id: 'split-test',
+          title: 'Test',
+          startsAt: startsAt,
+          endsAt: startsAt.add(const Duration(hours: 2)),
+          courtCount: 1,
+          courtRentalTotalVnd: 400,
+          shuttleUnitPriceVnd: 10,
+          shuttlesUsed: 10,
+          extraCostsVnd: 40,
+          splitMode: splitMode,
+          participants: const [
+            SessionMember(
+              id: 'p1',
+              displayName: 'Nam',
+              skillLevel: 2,
+              eloRating: 1000,
+              setsPlayed: 3,
+            ),
+            SessionMember(
+              id: 'p2',
+              displayName: 'Tuấn',
+              skillLevel: 2,
+              eloRating: 1000,
+              setsPlayed: 1,
+            ),
+            SessionMember(
+              id: 'p3',
+              displayName: 'Minh',
+              skillLevel: 2,
+              eloRating: 1000,
+            ),
+          ],
+        );
+
+    final equalSession = createSession(BillSplitMode.equal);
+    final equalBills = equalSession.participants
+      .map(equalSession.billFor)
+        .toList();
+    final perSetSession = createSession(BillSplitMode.perSet);
+    final perSetBills = perSetSession.participants
+        .map(perSetSession.billFor)
+        .toList();
+
+    expect(equalBills.map((bill) => bill.totalAmountVnd), [182, 179, 179]);
+    expect(perSetBills.map((bill) => bill.courtShareVnd), [300, 100, 0]);
+    expect(perSetBills.map((bill) => bill.shuttleShareVnd), [75, 25, 0]);
+    expect(perSetBills.map((bill) => bill.extraShareVnd), [30, 10, 0]);
+  });
 }

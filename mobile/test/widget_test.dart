@@ -4,6 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:club_squad_app/core/widgets/mobile_frame.dart';
 import 'package:club_squad_app/features/home/screens/home_dashboard_screen.dart';
+import 'package:club_squad_app/features/scoreboard/models/match_score.dart';
+import 'package:club_squad_app/features/scoreboard/widgets/interactive_court_widget.dart';
 
 void main() {
   testWidgets('mobile frame caps its width on a desktop-sized viewport', (
@@ -43,6 +45,40 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('interactive court shows all four players and court semantics', (
+    tester,
+  ) async {
+    final score = MatchScore.initial(
+      teamAPlayerNames: const ['Nam', 'Tuấn'],
+      teamBPlayerNames: const ['Hoàng', 'Minh'],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              child: InteractiveCourtWidget(score: score),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final semantics = tester.ensureSemantics();
+    addTearDown(semantics.dispose);
+    for (final player in ['Nam', 'Tuấn', 'Hoàng', 'Minh']) {
+      expect(find.text(player), findsOneWidget);
+    }
+    expect(
+      find.bySemanticsLabel(
+        'Sơ đồ sân đôi, chấm xanh là người giao cầu, chấm cam là người đỡ',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets(

@@ -38,6 +38,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   late SessionModel _session;
   late final TextEditingController _courtCostController;
   late final TextEditingController _shuttleCountController;
+  late final TextEditingController _extraCostController;
   final _detailStorage = SessionDetailStorage();
   final Set<String> _finishedMatchKeys = {};
   final Map<String, MatchScore> _matchScores = {};
@@ -56,6 +57,9 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     _shuttleCountController = TextEditingController(
       text: '${_session.shuttlesUsed}',
     );
+    _extraCostController = TextEditingController(
+      text: '${_session.extraCostsVnd}',
+    );
     unawaited(_restoreLocalState());
   }
 
@@ -72,6 +76,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   void dispose() {
     _courtCostController.dispose();
     _shuttleCountController.dispose();
+    _extraCostController.dispose();
     super.dispose();
   }
 
@@ -94,6 +99,9 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         if (saved == null) return member;
         return member.copyWith(
           eloRating: _readInt(saved, 'eloRating'),
+          setsPlayed: saved['setsPlayed'] == null
+              ? member.setsPlayed
+              : _readInt(saved, 'setsPlayed'),
           attendanceWeight: _readDouble(saved, 'attendanceWeight'),
           lateFeeVnd: _readInt(saved, 'lateFeeVnd'),
           paymentStatus: SessionPaymentStatus.values.byName(
@@ -110,6 +118,9 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           teamAPlayerIds: _readStringList(json, 'teamAPlayerIds'),
           teamBPlayerIds: _readStringList(json, 'teamBPlayerIds'),
           teamAWon: _readNullableBool(json, 'teamAWon'),
+            setsPlayed: json['setsPlayed'] == null
+              ? 0
+              : _readInt(json, 'setsPlayed'),
         );
       }).toList(growable: false);
       final scheduledMatches = _readList(snapshot, 'scheduledMatches').map((raw) {
@@ -144,12 +155,21 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         _session = _session.copyWith(
           courtRentalTotalVnd: _readInt(snapshot, 'courtRentalTotalVnd'),
           shuttlesUsed: _readInt(snapshot, 'shuttlesUsed'),
+            extraCostsVnd: snapshot['extraCostsVnd'] == null
+              ? _session.extraCostsVnd
+              : _readInt(snapshot, 'extraCostsVnd'),
+            splitMode: snapshot['splitMode'] == null
+              ? _session.splitMode
+              : BillSplitMode.values.byName(
+                _readString(snapshot, 'splitMode'),
+              ),
           participants: participants,
           recentMatches: recentMatches,
           scheduledMatches: scheduledMatches,
         );
         _courtCostController.text = '${_session.courtRentalTotalVnd}';
         _shuttleCountController.text = '${_session.shuttlesUsed}';
+        _extraCostController.text = '${_session.extraCostsVnd}';
         _matchScores
           ..clear()
           ..addAll(restoredScores);
@@ -170,6 +190,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           {
             'id': member.id,
             'eloRating': member.eloRating,
+            'setsPlayed': member.setsPlayed,
             'attendanceWeight': member.attendanceWeight,
             'lateFeeVnd': member.lateFeeVnd,
             'paymentStatus': member.paymentStatus.name,
@@ -183,6 +204,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
             'teamAPlayerIds': match.teamAPlayerIds,
             'teamBPlayerIds': match.teamBPlayerIds,
             'teamAWon': match.teamAWon,
+            'setsPlayed': match.setsPlayed,
           },
       ],
       'scheduledMatches': [
@@ -204,6 +226,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       'finishedMatchKeys': _finishedMatchKeys.toList(),
       'courtRentalTotalVnd': _session.courtRentalTotalVnd,
       'shuttlesUsed': _session.shuttlesUsed,
+      'extraCostsVnd': _session.extraCostsVnd,
+      'splitMode': _session.splitMode.name,
     };
     final operation = _writeTail.then(
       (_) => _detailStorage.save(_session.id, snapshot),
@@ -237,9 +261,18 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     _updateSession(_session.copyWith(shuttlesUsed: count));
   }
 
+  void _updateExtraCost(String value) {
+    final amount = int.tryParse(value) ?? 0;
+    _updateSession(_session.copyWith(extraCostsVnd: amount));
+  }
+
   Future<void> _openCamera(ScheduledSessionMatch scheduledMatch) async {
     final suggestion = scheduledMatch.suggestion;
     final matchKey = _matchKey(scheduledMatch);
+    if (_finishedMatchKeys.contains(matchKey)) {
+      _showMessage('Trận đã chốt. Tỉ số và ELO không thể sửa thêm.');
+      return;
+    }
     final score = await Navigator.of(context).push<MatchScore>(
       MaterialPageRoute<MatchScore>(
         builder: (_) => CameraScoreboardScreen(
@@ -249,8 +282,31 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                 teamBPlayerNames: _playerNames(suggestion.teamB),
               ),
           onScoreChanged: (updatedScore) {
+            final previousSetCount = _matchScores[matchKey]
+                    ?.sets
+                    .where((set) => set.winner != null)
+                    .length ??
+                0;
+            final updatedSetCount = updatedScore.sets
+                .where((set) => set.winner != null)
+                .length;
             _matchScores[matchKey] = updatedScore;
-            unawaited(_persistLocalState());
+            final setDelta = updatedSetCount - previousSetCount;
+            if (setDelta != 0) {
+              final matchPlayerIds = suggestion.players
+                  .map((player) => player.id)
+                  .toSet();
+              final participants = _session.participants.map((member) {
+                if (!matchPlayerIds.contains(member.id)) return member;
+                return member.copyWith(
+                  setsPlayed:
+                      (member.setsPlayed + setDelta).clamp(0, 999999),
+                );
+              }).toList(growable: false);
+              _updateSession(_session.copyWith(participants: participants));
+            } else {
+              unawaited(_persistLocalState());
+            }
           },
         ),
       ),
@@ -625,10 +681,35 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
             );
           },
         ),
+        const SizedBox(height: 10),
+        _CostInput(
+          label: 'Phụ phí chung (nước, cầu mua thêm) ₫',
+          controller: _extraCostController,
+          enabled: widget.isAdmin,
+          onChanged: _updateExtraCost,
+        ),
+        const SizedBox(height: 10),
+        SegmentedButton<BillSplitMode>(
+          segments: const [
+            ButtonSegment(value: BillSplitMode.equal, label: Text('Đều')),
+            ButtonSegment(value: BillSplitMode.perSet, label: Text('Theo set')),
+            ButtonSegment(
+              value: BillSplitMode.attendanceWeighted,
+              label: Text('Tham gia'),
+            ),
+          ],
+          selected: {_session.splitMode},
+          onSelectionChanged: widget.isAdmin
+              ? (selection) => _updateSession(
+                    _session.copyWith(splitMode: selection.first),
+                  )
+              : null,
+        ),
         const SizedBox(height: 8),
         Text(
           'Đơn giá cầu: ${formatVnd(_session.shuttleUnitPriceVnd)} / quả · '
-          'Tổng cầu: ${formatVnd(_session.shuttlesUsed * _session.shuttleUnitPriceVnd)}',
+          'Tổng cầu: ${formatVnd(_session.shuttlesUsed * _session.shuttleUnitPriceVnd)} · '
+          'Phụ phí: ${formatVnd(_session.extraCostsVnd)}',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         if (_bankAccount == null)
@@ -817,6 +898,7 @@ class _MemberBillingCard extends StatelessWidget {
             Text(
               'Sân ${formatVnd(bill.courtShareVnd)}  ·  '
               'Cầu ${formatVnd(bill.shuttleShareVnd)}  ·  '
+              'Phụ phí ${formatVnd(bill.extraShareVnd)}  ·  '
               'Phạt ${formatVnd(bill.lateFeeVnd)}',
               style: Theme.of(context).textTheme.bodySmall,
             ),

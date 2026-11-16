@@ -7,16 +7,22 @@ class MatchPlayer {
     required this.eloRating,
     this.lastPlayedAt,
     this.matchesPlayed = 0,
+    this.setsPlayed = 0,
+    this.setsSatOut = 0,
   })  : assert(id != ''),
         assert(skillLevel >= 1 && skillLevel <= 4),
         assert(eloRating >= 0),
-        assert(matchesPlayed >= 0);
+      assert(matchesPlayed >= 0),
+      assert(setsPlayed >= 0),
+      assert(setsSatOut >= 0);
 
   final String id;
   final int skillLevel;
   final int eloRating;
   final DateTime? lastPlayedAt;
   final int matchesPlayed;
+  final int setsPlayed;
+  final int setsSatOut;
 
   int get combinedSkill => skillLevel * 400 + eloRating;
 
@@ -31,8 +37,10 @@ class RecentMatch {
     required this.teamAPlayerIds,
     required this.teamBPlayerIds,
     this.teamAWon,
+    this.setsPlayed = 0,
   })  : assert(teamAPlayerIds.length == 2),
-        assert(teamBPlayerIds.length == 2);
+      assert(teamBPlayerIds.length == 2),
+      assert(setsPlayed >= 0);
 
   final int matchNumber;
   final List<String> teamAPlayerIds;
@@ -40,6 +48,7 @@ class RecentMatch {
 
   /// Null while the match is unfinished or when restoring legacy history.
   final bool? teamAWon;
+  final int setsPlayed;
 }
 
 class MatchSuggestion {
@@ -124,9 +133,13 @@ class BadmintonMatchmakingEngine {
                 teamA: teams.$1,
                 teamB: teams.$2,
                 fatigueRank: _fatigueRank(quartet),
+                setsPlayedRank: _setsPlayedRank(quartet),
+                setsSatOutRank: _setsSatOutRank(quartet),
                 restRank: _restRank(quartet, referenceTime),
                 repeatedPairCount:
                     repeatedPairs.countFor(teams.$1, teams.$2),
+                repeatedPartnerCount:
+                  repeatedPairs.partnerCountFor(teams.$1, teams.$2),
                 chemistryScore: chemistry.scoreFor(teams.$1, teams.$2),
               );
               if (best == null || candidate.compareTo(best) < 0) {
@@ -182,7 +195,9 @@ class BadmintonMatchmakingEngine {
           player.skillLevel < 1 ||
           player.skillLevel > 4 ||
           player.eloRating < 0 ||
-          player.matchesPlayed < 0,
+          player.matchesPlayed < 0 ||
+          player.setsPlayed < 0 ||
+          player.setsSatOut < 0,
     )) {
       throw ArgumentError('Player ratings and fatigue values are invalid.');
     }
@@ -197,6 +212,22 @@ class BadmintonMatchmakingEngine {
   static List<int> _fatigueRank(List<MatchPlayer> quartet) {
     final values = quartet.map((player) => player.fatiguePenalty).toList()
       ..sort();
+    return values;
+  }
+
+  static List<int> _setsPlayedRank(List<MatchPlayer> quartet) {
+    final values = quartet
+        .map((player) => player.setsPlayed)
+        .toList()
+      ..sort();
+    return values;
+  }
+
+  static List<int> _setsSatOutRank(List<MatchPlayer> quartet) {
+    final values = quartet
+        .map((player) => player.setsSatOut)
+        .toList()
+      ..sort((first, second) => second.compareTo(first));
     return values;
   }
 
@@ -381,6 +412,16 @@ class _RepeatedPairs {
     }
     return count;
   }
+
+  int partnerCountFor(List<MatchPlayer> teamA, List<MatchPlayer> teamB) {
+    return [teamA, teamB]
+        .where(
+          (team) => partners.contains(
+            BadmintonMatchmakingEngine._pairKey(team[0].id, team[1].id),
+          ),
+        )
+        .length;
+  }
 }
 
 class _Candidate implements Comparable<_Candidate> {
@@ -388,20 +429,36 @@ class _Candidate implements Comparable<_Candidate> {
     required this.teamA,
     required this.teamB,
     required this.fatigueRank,
+    required this.setsPlayedRank,
+    required this.setsSatOutRank,
     required this.restRank,
     required this.repeatedPairCount,
+    required this.repeatedPartnerCount,
     required this.chemistryScore,
   });
 
   final List<MatchPlayer> teamA;
   final List<MatchPlayer> teamB;
   final List<int> fatigueRank;
+  final List<int> setsPlayedRank;
+  final List<int> setsSatOutRank;
   final List<double> restRank;
   final int repeatedPairCount;
+  final int repeatedPartnerCount;
   final _ChemistryScore chemistryScore;
 
   @override
   int compareTo(_Candidate other) {
+    for (var index = 0; index < setsPlayedRank.length; index++) {
+      final setComparison =
+          setsPlayedRank[index].compareTo(other.setsPlayedRank[index]);
+      if (setComparison != 0) return setComparison;
+    }
+    for (var index = 0; index < setsSatOutRank.length; index++) {
+      final restComparison =
+          other.setsSatOutRank[index].compareTo(setsSatOutRank[index]);
+      if (restComparison != 0) return restComparison;
+    }
     for (var index = 0; index < fatigueRank.length; index++) {
       final fatigueComparison =
           fatigueRank[index].compareTo(other.fatigueRank[index]);
@@ -422,6 +479,9 @@ class _Candidate implements Comparable<_Candidate> {
         .compareTo(other.chemistryScore.challengeGap);
     if (gapComparison != 0) return gapComparison;
 
+    final partnerRepeatComparison =
+      repeatedPartnerCount.compareTo(other.repeatedPartnerCount);
+    if (partnerRepeatComparison != 0) return partnerRepeatComparison;
     final repeatComparison = repeatedPairCount.compareTo(other.repeatedPairCount);
     if (repeatComparison != 0) return repeatComparison;
     final skillComparison =

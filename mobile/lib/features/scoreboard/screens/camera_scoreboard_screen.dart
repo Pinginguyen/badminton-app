@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:confetti/confetti.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -42,6 +43,7 @@ class _CameraScoreboardScreenState extends State<CameraScoreboardScreen>
     with WidgetsBindingObserver {
   CameraController? _cameraController;
   late MatchScore _score;
+  late final ConfettiController _confettiController;
   final List<MatchScore> _undoHistory = [];
   bool _isCameraLoading = true;
   bool _isRecording = false;
@@ -56,6 +58,9 @@ class _CameraScoreboardScreenState extends State<CameraScoreboardScreen>
   void initState() {
     super.initState();
     _score = widget.initialScore;
+    _confettiController = ConfettiController(
+      duration: const Duration(seconds: 3),
+    );
     final initialSpeed = _effectiveSmashSpeedKmh;
     if (initialSpeed != null && initialSpeed > 0) {
       _highestSmashSpeedKmh = initialSpeed;
@@ -221,11 +226,16 @@ class _CameraScoreboardScreenState extends State<CameraScoreboardScreen>
       _showMessage('Trận đấu đã kết thúc. Vuốt xuống để sửa điểm.');
       return;
     }
+    final previousServingTeam = _score.servingTeam;
     setState(() {
       _undoHistory.add(_score);
       _score = _score.addPoint(team);
     });
-    unawaited(_triggerScoreHaptics());
+    unawaited(HapticFeedback.lightImpact());
+    if (previousServingTeam != _score.servingTeam) {
+      unawaited(HapticFeedback.mediumImpact());
+    }
+    if (_score.isMatchComplete) _confettiController.play();
     widget.onScoreChanged?.call(_score);
   }
 
@@ -234,15 +244,13 @@ class _CameraScoreboardScreenState extends State<CameraScoreboardScreen>
       _showMessage('Chưa có điểm nào để hoàn tác.');
       return;
     }
+    final previousServingTeam = _score.servingTeam;
     setState(() => _score = _undoHistory.removeLast());
-    unawaited(_triggerScoreHaptics());
+    unawaited(HapticFeedback.lightImpact());
+    if (previousServingTeam != _score.servingTeam) {
+      unawaited(HapticFeedback.mediumImpact());
+    }
     widget.onScoreChanged?.call(_score);
-  }
-
-  Future<void> _triggerScoreHaptics() async {
-    await HapticFeedback.selectionClick();
-    await Future.delayed(const Duration(milliseconds: 35));
-    await HapticFeedback.mediumImpact();
   }
 
   void _onTapUp(TapUpDetails details, double width) {
@@ -283,6 +291,7 @@ class _CameraScoreboardScreenState extends State<CameraScoreboardScreen>
     _cameraController = null;
     if (controller != null) unawaited(controller.dispose());
     unawaited(WakelockPlus.disable());
+    _confettiController.dispose();
     super.dispose();
   }
 
@@ -410,6 +419,27 @@ class _CameraScoreboardScreenState extends State<CameraScoreboardScreen>
                     ],
                   ],
                 ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 72,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: ConfettiWidget(
+                confettiController: _confettiController,
+                blastDirectionality: BlastDirectionality.explosive,
+                emissionFrequency: 0.06,
+                numberOfParticles: 18,
+                maxBlastForce: 22,
+                minBlastForce: 9,
+                gravity: 0.24,
+                colors: const [
+                  Color(0xFFCCFF00),
+                  Color(0xFFFF5E00),
+                  Colors.white,
+                ],
               ),
             ),
           ),

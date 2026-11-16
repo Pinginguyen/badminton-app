@@ -4,19 +4,20 @@ import 'package:google_fonts/google_fonts.dart';
 class AppTheme {
   AppTheme._();
 
-  static const Color neonGreen = Color(0xFFC6FF00);
-  static const Color limeYellow = Color(0xFFE7FF62);
-  static const Color courtNavy = Color(0xFF0B1118);
-  static const Color raisedNavy = Color(0xFF151F29);
+  static const Color neonGreen = Color(0xFFCCFF00);
+  static const Color sportOrange = Color(0xFFFF5E00);
+  static const Color limeYellow = sportOrange;
+  static const Color courtNavy = Color(0xFF121212);
+  static const Color raisedNavy = Color(0xFF1E1E1E);
 
   static final ThemeData darkTheme = ThemeData(
     useMaterial3: true,
     brightness: Brightness.dark,
     colorScheme: const ColorScheme.dark(
       primary: neonGreen,
-      secondary: limeYellow,
+      secondary: sportOrange,
       surface: raisedNavy,
-      error: Color(0xFFFF6B6B),
+      error: sportOrange,
     ),
     textTheme: GoogleFonts.getTextTheme(
       'Rajdhani',

@@ -9,14 +9,17 @@ import '../../../core/engine/emvco_vietqr.dart';
 import '../../../core/storage/local_storage_service.dart';
 import '../../../core/storage/vietqr_settings_store.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/elo_calculator.dart';
 import '../../../core/ui/bouncy_pressable.dart';
 import '../../../core/ui/glass_container.dart';
 import '../../../services/matchmaking_service.dart';
 import '../../../services/vietqr_service.dart';
 import '../../scoreboard/models/match_score.dart';
 import '../../scoreboard/screens/camera_scoreboard_screen.dart';
+import '../../scoreboard/widgets/interactive_court_widget.dart';
 import '../../settings/screens/payment_settings_screen.dart';
 import '../../session/models/session_model.dart';
+import '../../tournament/screens/tournament_screen.dart';
 
 class HomeDashboardScreen extends StatefulWidget {
   const HomeDashboardScreen({
@@ -40,6 +43,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   final _courtCostController = TextEditingController();
   final _shuttlePriceController = TextEditingController();
   final _shuttleCountController = TextEditingController();
+  final _extraCostController = TextEditingController();
   final List<_HubPlayer> _players = [];
   final List<RecentMatch> _recentMatches = [];
   final List<MatchSuggestion> _matches = [];
@@ -53,6 +57,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   int _roundRecentStartIndex = 0;
   int _nextPlayerId = 0;
   VietQrBankAccount? _bankAccount;
+  BillSplitMode _billSplitMode = BillSplitMode.attendanceWeighted;
   bool _isLoading = true;
   bool _storageErrorShown = false;
   String? _loadError;
@@ -71,6 +76,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     _courtCostController.dispose();
     _shuttlePriceController.dispose();
     _shuttleCountController.dispose();
+    _extraCostController.dispose();
     super.dispose();
   }
 
@@ -189,6 +195,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
             matchNumber: _recentMatches.length + 1,
             teamAPlayerIds: teamAIds,
             teamBPlayerIds: teamBIds,
+            setsPlayed: 0,
           ),
         );
       }
@@ -207,8 +214,15 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     );
   }
 
-  void _openCamera(int matchIndex) {
-    Navigator.of(context).push<void>(
+  Future<void> _openCamera(int matchIndex) async {
+    final historyIndex = _roundRecentStartIndex + matchIndex;
+    if (historyIndex >= 0 &&
+        historyIndex < _recentMatches.length &&
+        _recentMatches[historyIndex].teamAWon != null) {
+      _showMessage('Trận đã chốt. Tỉ số và ELO không thể sửa thêm.');
+      return;
+    }
+    final result = await Navigator.of(context).push<MatchScore>(
       MaterialPageRoute(
         builder: (_) => CameraScoreboardScreen(
           initialScore: _matchScores[matchIndex],
@@ -216,24 +230,46 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ),
       ),
     );
+    if (!mounted || result == null || !result.isMatchComplete) return;
+    await _confirmQuickMatchResult(matchIndex, result);
   }
 
   void _onMatchScoreChanged(int matchIndex, MatchScore score) {
     if (!mounted || matchIndex < 0 || matchIndex >= _matchScores.length) return;
+    final oldScore = _matchScores[matchIndex];
+    final completedSetCount = (value) =>
+        value.sets.where((set) => set.winner != null).length;
+    final completedSetDelta =
+        completedSetCount(score) - completedSetCount(oldScore);
     setState(() {
       _matchScores[matchIndex] = score;
+      if (completedSetDelta != 0) {
+        final currentMatchIds =
+            _matches[matchIndex].players.map((player) => player.id).toSet();
+        final playersOnAnyCourt = _matches
+            .expand((match) => match.players)
+            .map((player) => player.id)
+            .toSet();
+        for (final player in _players) {
+          if (currentMatchIds.contains(player.id)) {
+            player.setsPlayed =
+                (player.setsPlayed + completedSetDelta).clamp(0, 999999);
+          } else if (!playersOnAnyCourt.contains(player.id)) {
+            player.setsSatOut =
+                (player.setsSatOut + completedSetDelta).clamp(0, 999999);
+          }
+        }
+      }
       final historyIndex = _roundRecentStartIndex + matchIndex;
       if (historyIndex >= 0 && historyIndex < _recentMatches.length) {
         final recent = _recentMatches[historyIndex];
-        final teamAWon = score.isMatchComplete
-            ? score.teamASetsWon > score.teamBSetsWon
-            : null;
-        if (recent.teamAWon != teamAWon) {
+        if (recent.setsPlayed != completedSetCount(score)) {
           _recentMatches[historyIndex] = RecentMatch(
             matchNumber: recent.matchNumber,
             teamAPlayerIds: recent.teamAPlayerIds,
             teamBPlayerIds: recent.teamBPlayerIds,
-            teamAWon: teamAWon,
+            teamAWon: recent.teamAWon,
+            setsPlayed: completedSetCount(score),
           );
         }
       }
@@ -336,6 +372,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         matchNumber: updatedHistory[historyIndex].matchNumber,
         teamAPlayerIds: teamA.map((player) => player.id).toList(),
         teamBPlayerIds: teamB.map((player) => player.id).toList(),
+        teamAWon: updatedHistory[historyIndex].teamAWon,
+        setsPlayed: updatedHistory[historyIndex].setsPlayed,
       );
     }
 
@@ -351,6 +389,70 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ..addAll(updatedHistory);
     });
     unawaited(HapticFeedback.mediumImpact());
+    _queuePersistence();
+  }
+
+  Future<void> _confirmQuickMatchResult(
+    int matchIndex,
+    MatchScore score,
+  ) async {
+    final historyIndex = _roundRecentStartIndex + matchIndex;
+    if (historyIndex < 0 || historyIndex >= _recentMatches.length) return;
+    final recent = _recentMatches[historyIndex];
+    if (recent.teamAWon != null) return;
+    final teamAWon = score.teamASetsWon > score.teamBSetsWon;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Chốt kết quả & cập nhật ELO?'),
+        content: Text(
+          'Đôi ${teamAWon ? 'A' : 'B'} thắng '
+          '${score.teamASetsWon}-${score.teamBSetsWon} set. '
+          'Kết quả được lưu trên thiết bị.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Sửa tỉ số'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Chốt trận'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+
+    final playersById = {for (final player in _players) player.id: player};
+    final teamA = recent.teamAPlayerIds.map((id) => playersById[id]!).toList();
+    final teamB = recent.teamBPlayerIds.map((id) => playersById[id]!).toList();
+    final pointDelta = score.sets.fold<int>(
+      0,
+      (total, set) => total + set.teamA - set.teamB,
+    );
+    final pointMargin = (teamAWon ? pointDelta : -pointDelta)
+        .clamp(0, 30)
+        .toInt();
+    final updatedElos = calculateDoublesElo(
+      teamAElos: teamA.map((player) => player.eloRating).toList(),
+      teamBElos: teamB.map((player) => player.eloRating).toList(),
+      teamAWon: teamAWon,
+      pointMargin: pointMargin,
+    );
+    setState(() {
+      for (var index = 0; index < 2; index++) {
+        teamA[index].eloRating = updatedElos[index];
+        teamB[index].eloRating = updatedElos[index + 2];
+      }
+      _recentMatches[historyIndex] = RecentMatch(
+        matchNumber: recent.matchNumber,
+        teamAPlayerIds: recent.teamAPlayerIds,
+        teamBPlayerIds: recent.teamBPlayerIds,
+        teamAWon: teamAWon,
+        setsPlayed: recent.setsPlayed,
+      );
+    });
     _queuePersistence();
   }
 
@@ -511,7 +613,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     final courtCost = _requiredString(billing, 'courtCost');
     final shuttlePrice = _requiredString(billing, 'shuttlePrice');
     final shuttleCount = _requiredString(billing, 'shuttleCount');
-    for (final value in [courtCost, shuttlePrice, shuttleCount]) {
+    final extraCost = billing['extraCost'] as String? ?? '';
+    for (final value in [courtCost, shuttlePrice, shuttleCount, extraCost]) {
       if (!RegExp(r'^\d*$').hasMatch(value)) {
         throw const FormatException('Saved billing input contains invalid characters.');
       }
@@ -537,6 +640,11 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     _courtCostController.text = courtCost;
     _shuttlePriceController.text = shuttlePrice;
     _shuttleCountController.text = shuttleCount;
+    _extraCostController.text = extraCost;
+    final splitModeName = billing['splitMode'] as String?;
+    _billSplitMode = splitModeName == null
+      ? BillSplitMode.attendanceWeighted
+      : BillSplitMode.values.byName(splitModeName);
     _billingSession = _requiredBool(snapshot, 'billingCalculated') &&
             _players.isNotEmpty
         ? _createBillingSession()
@@ -559,6 +667,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           'courtCost': _courtCostController.text,
           'shuttlePrice': _shuttlePriceController.text,
           'shuttleCount': _shuttleCountController.text,
+          'extraCost': _extraCostController.text,
+          'splitMode': _billSplitMode.name,
         },
         'billingCalculated': _billingSession != null,
       };
@@ -571,6 +681,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       _courtCostController.clear();
       _shuttlePriceController.clear();
       _shuttleCountController.clear();
+      _extraCostController.clear();
       _players.clear();
       _recentMatches.clear();
       _matches.clear();
@@ -581,6 +692,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         _roundNumber = 0;
         _roundRecentStartIndex = 0;
         _nextPlayerId = 0;
+        _billSplitMode = BillSplitMode.attendanceWeighted;
         _billingSession = null;
         _loadError = null;
       });
@@ -604,6 +716,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
       courtRentalTotalVnd: int.tryParse(_courtCostController.text) ?? 0,
       shuttleUnitPriceVnd: int.tryParse(_shuttlePriceController.text) ?? 0,
       shuttlesUsed: int.tryParse(_shuttleCountController.text) ?? 0,
+      extraCostsVnd: int.tryParse(_extraCostController.text) ?? 0,
+      splitMode: _billSplitMode,
       participants: _players
           .map(
             (player) => SessionMember(
@@ -611,6 +725,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
               displayName: player.name,
               skillLevel: player.skillLevel,
               eloRating: player.eloRating,
+              setsPlayed: player.setsPlayed,
               lastPlayedAt: player.lastPlayedAt,
               attendanceWeight: player.lateOrLeavingEarly ? 0.5 : 1,
             ),
@@ -707,6 +822,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
             const SizedBox(height: 22),
             _buildCourtSection(),
             _buildMatchSection(),
+            _buildPlayerStatsSection(),
             const SizedBox(height: 22),
             _buildBillingSection(session, bills, totalDue),
           ],
@@ -775,10 +891,39 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ],
       ),
       actions: [
-        IconButton(
-          tooltip: 'Cài đặt thanh toán',
-          onPressed: _openPaymentSettings,
-          icon: const Icon(Icons.settings_outlined),
+        PopupMenuButton<_HomeMenuAction>(
+          tooltip: 'Cài đặt và giải đấu',
+          onSelected: (action) {
+            switch (action) {
+              case _HomeMenuAction.paymentSettings:
+                unawaited(_openPaymentSettings());
+              case _HomeMenuAction.tournament:
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => const TournamentScreen(),
+                  ),
+                );
+            }
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(
+              value: _HomeMenuAction.paymentSettings,
+              child: ListTile(
+                leading: Icon(Icons.settings_outlined),
+                title: Text('Cài đặt thanh toán'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            PopupMenuItem(
+              value: _HomeMenuAction.tournament,
+              child: ListTile(
+                leading: Icon(Icons.emoji_events_outlined),
+                title: Text('Giải đấu mini'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+          ],
+          icon: const Icon(Icons.more_vert),
         ),
         _AdminBadge(isAdmin: widget.isAdmin),
         const SizedBox(width: 14),
@@ -982,6 +1127,100 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     );
   }
 
+  Widget _buildPlayerStatsSection() {
+    final completedMatches = _recentMatches
+        .where((match) => match.teamAWon != null)
+        .toList()
+      ..sort((first, second) => second.matchNumber.compareTo(first.matchNumber));
+    if (completedMatches.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 22),
+        const _SectionTitle(
+          index: 'FORM',
+          title: 'Phong độ thành viên',
+          subtitle: 'Tỷ lệ thắng, chuỗi hiện tại và cạ cứng',
+        ),
+        const SizedBox(height: 8),
+        for (final player in _players)
+          Builder(
+            builder: (context) {
+              final matches = completedMatches.where((match) =>
+                  match.teamAPlayerIds.contains(player.id) ||
+                  match.teamBPlayerIds.contains(player.id)).toList();
+              final wins = matches
+                  .where((match) => _didPlayerWin(match, player.id))
+                  .length;
+              final winRate =
+                  matches.isEmpty ? 0 : (wins * 100 / matches.length).round();
+              var winStreak = 0;
+              var countingStreak = true;
+              final partnerWins = <String, int>{};
+              for (final match in matches) {
+                final didWin = _didPlayerWin(match, player.id);
+                if (countingStreak && didWin) {
+                  winStreak++;
+                } else {
+                  countingStreak = false;
+                }
+                if (didWin) {
+                  final team = match.teamAPlayerIds.contains(player.id)
+                      ? match.teamAPlayerIds
+                      : match.teamBPlayerIds;
+                  final partnerId = team.firstWhere((id) => id != player.id);
+                  partnerWins.update(
+                    partnerId,
+                    (count) => count + 1,
+                    ifAbsent: () => 1,
+                  );
+                }
+              }
+              final rankedPartners = partnerWins.entries.toList()
+                ..sort((first, second) => second.value.compareTo(first.value));
+              final bestPartner =
+                  rankedPartners.isEmpty ? null : rankedPartners.first;
+                  final partner = bestPartner == null
+                    ? <_HubPlayer>[]
+                    : _players.where((item) => item.id == bestPartner.key).toList();
+              final partnerName = bestPartner == null
+                  ? 'Chưa có trận thắng chung'
+                    : '${partner.isEmpty ? 'Đã rời nhóm' : partner.first.name} '
+                      '(${bestPartner.value})';
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 7),
+                child: ListTile(
+                  dense: true,
+                  title: Text(player.name),
+                  subtitle: Text(
+                    'Chuỗi thắng $winStreak · Cạ cứng: $partnerName',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Text(
+                    '$winRate%',
+                    style: const TextStyle(
+                      color: AppTheme.neonGreen,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  bool _didPlayerWin(RecentMatch match, String playerId) {
+    if (match.teamAWon == null) return false;
+    final isOnTeamA = match.teamAPlayerIds.contains(playerId);
+    return isOnTeamA ? match.teamAWon! : !match.teamAWon!;
+  }
+
   Widget _buildBillingSection(
     SessionModel? session,
     List<SessionBill> bills,
@@ -1029,15 +1268,39 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
             );
           },
         ),
+        const SizedBox(height: 10),
+        SegmentedButton<BillSplitMode>(
+          segments: const [
+            ButtonSegment(value: BillSplitMode.equal, label: Text('Đều')),
+            ButtonSegment(value: BillSplitMode.perSet, label: Text('Theo set')),
+            ButtonSegment(
+              value: BillSplitMode.attendanceWeighted,
+              label: Text('Tham gia'),
+            ),
+          ],
+          selected: {_billSplitMode},
+          onSelectionChanged: (selection) {
+            setState(() => _billSplitMode = selection.first);
+            _refreshBillingSession();
+          },
+        ),
         const SizedBox(height: 9),
         _MoneyField(
           controller: _shuttleCountController,
           label: 'Số quả cầu đã đánh',
           onChanged: _refreshBillingSession,
         ),
+        const SizedBox(height: 9),
+        _MoneyField(
+          controller: _extraCostController,
+          label: 'Phụ phí chung (nước, cầu mua thêm) ₫',
+          onChanged: _refreshBillingSession,
+        ),
         const SizedBox(height: 5),
         Text(
-          'Tiền cầu = giá mỗi quả × số quả đã đánh.',
+          _billSplitMode == BillSplitMode.perSet
+              ? 'Tiền chung chia theo số set mỗi người đã chơi.'
+              : 'Tiền cầu = giá mỗi quả × số quả; phụ phí được cộng vào hóa đơn.',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: Colors.white54,
               ),
@@ -1122,6 +1385,8 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   }
 }
 
+enum _HomeMenuAction { paymentSettings, tournament }
+
 class _HubPlayer {
   _HubPlayer({required this.id, required this.name});
 
@@ -1130,6 +1395,8 @@ class _HubPlayer {
   int skillLevel = 2;
   int eloRating = 1000;
   int matchesPlayed = 0;
+  int setsPlayed = 0;
+  int setsSatOut = 0;
   bool lateOrLeavingEarly = false;
   DateTime? lastPlayedAt;
 
@@ -1139,6 +1406,8 @@ class _HubPlayer {
         eloRating: eloRating,
         lastPlayedAt: lastPlayedAt,
         matchesPlayed: matchesPlayed,
+        setsPlayed: setsPlayed,
+        setsSatOut: setsSatOut,
       );
 
   Map<String, Object?> toJson() => {
@@ -1147,6 +1416,8 @@ class _HubPlayer {
         'skillLevel': skillLevel,
         'eloRating': eloRating,
         'matchesPlayed': matchesPlayed,
+        'setsPlayed': setsPlayed,
+        'setsSatOut': setsSatOut,
         'lateOrLeavingEarly': lateOrLeavingEarly,
         'lastPlayedAt': lastPlayedAt?.toIso8601String(),
       };
@@ -1162,6 +1433,10 @@ class _HubPlayer {
     final matchesPlayedValue = json['matchesPlayed'];
     final matchesPlayed =
         matchesPlayedValue == null ? 0 : _requiredInt(json, 'matchesPlayed');
+    final setsPlayedValue = json['setsPlayed'];
+    final setsPlayed = setsPlayedValue == null ? 0 : _requiredInt(json, 'setsPlayed');
+    final setsSatOutValue = json['setsSatOut'];
+    final setsSatOut = setsSatOutValue == null ? 0 : _requiredInt(json, 'setsSatOut');
     final lastPlayedAtValue = json['lastPlayedAt'];
     final lastPlayedAt = switch (lastPlayedAtValue) {
       null => null,
@@ -1174,6 +1449,8 @@ class _HubPlayer {
         skillLevel > 4 ||
         eloRating < 0 ||
         matchesPlayed < 0 ||
+        setsPlayed < 0 ||
+        setsSatOut < 0 ||
         (lastPlayedAtValue is String && lastPlayedAt == null)) {
       throw const FormatException('A saved player is invalid.');
     }
@@ -1182,6 +1459,8 @@ class _HubPlayer {
       ..skillLevel = skillLevel
       ..eloRating = eloRating
       ..matchesPlayed = matchesPlayed
+      ..setsPlayed = setsPlayed
+      ..setsSatOut = setsSatOut
       ..lateOrLeavingEarly = _requiredBool(json, 'lateOrLeavingEarly')
       ..lastPlayedAt = lastPlayedAt;
   }
@@ -1564,6 +1843,8 @@ class _MatchCard extends StatelessWidget {
                   ),
             ),
             const SizedBox(height: 10),
+            InteractiveCourtWidget(score: score),
+            const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
@@ -1930,7 +2211,10 @@ class _BillTile extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     '${member.arrivedLate ? 'Sân 0,5 phần' : 'Sân đủ phần'}'
-                    ' · Cầu ${formatVnd(bill.shuttleShareVnd)}',
+                    ' · Cầu ${formatVnd(bill.shuttleShareVnd)}'
+                    ' · Phụ phí ${formatVnd(bill.extraShareVnd)}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: Colors.white60,
                         ),
@@ -1999,7 +2283,8 @@ class _PaymentQrDialog extends StatelessWidget {
             const SizedBox(height: 12),
             _QrBillLine(label: 'Tiền sân', amountVnd: bill.courtShareVnd),
             _QrBillLine(label: 'Tiền cầu', amountVnd: bill.shuttleShareVnd),
-            _QrBillLine(label: 'Phụ phí', amountVnd: bill.lateFeeVnd),
+            _QrBillLine(label: 'Phụ phí chung', amountVnd: bill.extraShareVnd),
+            _QrBillLine(label: 'Phạt trễ', amountVnd: bill.lateFeeVnd),
             const SizedBox(height: 14),
             Container(
               padding: const EdgeInsets.all(10),
@@ -2197,6 +2482,7 @@ Map<String, Object?> _recentMatchToJson(RecentMatch match) => {
       'teamAPlayerIds': match.teamAPlayerIds,
       'teamBPlayerIds': match.teamBPlayerIds,
       'teamAWon': match.teamAWon,
+      'setsPlayed': match.setsPlayed,
     };
 
 RecentMatch _recentMatchFromJson(Object? value) {
@@ -2205,10 +2491,15 @@ RecentMatch _recentMatchFromJson(Object? value) {
   final teamAPlayerIds = _requiredStringList(json, 'teamAPlayerIds');
   final teamBPlayerIds = _requiredStringList(json, 'teamBPlayerIds');
   final teamAWon = json['teamAWon'];
+  final setsPlayedValue = json['setsPlayed'];
+  final setsPlayed = setsPlayedValue == null
+      ? 0
+      : _requiredInt(json, 'setsPlayed');
   if (matchNumber < 1 ||
       teamAPlayerIds.length != 2 ||
       teamBPlayerIds.length != 2 ||
       {...teamAPlayerIds, ...teamBPlayerIds}.length != 4 ||
+      setsPlayed < 0 ||
       (teamAWon != null && teamAWon is! bool)) {
     throw const FormatException('A saved match history entry is invalid.');
   }
@@ -2217,6 +2508,7 @@ RecentMatch _recentMatchFromJson(Object? value) {
     teamAPlayerIds: List.unmodifiable(teamAPlayerIds),
     teamBPlayerIds: List.unmodifiable(teamBPlayerIds),
     teamAWon: teamAWon as bool?,
+    setsPlayed: setsPlayed,
   );
 }
 

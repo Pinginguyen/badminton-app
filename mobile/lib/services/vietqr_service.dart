@@ -1,47 +1,37 @@
-/// Builds dynamic VietQR image URLs without an additional Dart package.
-///
-/// The returned image URL is rendered by VietQR's image service. Keep the
-/// recipient bank details in admin-managed configuration, never source code.
+import '../core/engine/emvco_vietqr.dart';
+
+/// Builds local EMVCo VietQR payloads rendered by qr_flutter.
 class VietQrBankAccount {
   const VietQrBankAccount({
     required this.bankBin,
     required this.accountNumber,
     required this.accountName,
+    this.bankName = '',
   });
 
   /// Six-digit VietQR/NAPAS bank BIN (for example, configured by the admin).
   final String bankBin;
   final String accountNumber;
   final String accountName;
+  final String bankName;
 }
 
 class VietQrPaymentCode {
   const VietQrPaymentCode({
     required this.amountVnd,
     required this.transferMemo,
-    required this.imageUri,
+    required this.payload,
   });
 
   final int amountVnd;
   final String transferMemo;
-  final Uri imageUri;
+  final String payload;
 }
 
 class VietQrService {
-  const VietQrService({this.template = 'compact2'});
+  const VietQrService();
 
-  static const _allowedTemplates = {
-    'compact',
-    'compact2',
-    'qr_only',
-    'print',
-  };
-
-  final String template;
-
-  /// Creates a VietQR image URL containing the exact bill amount and required
-  /// `CLB_{sessionId}_{memberId}` transfer memo. This method is synchronous
-  /// and does not install dependencies or perform a network request.
+  /// Creates an EMVCo VietQR payload with the exact amount and transfer memo.
   VietQrPaymentCode createPaymentCode({
     required VietQrBankAccount bankAccount,
     required int amountVnd,
@@ -55,24 +45,17 @@ class VietQrService {
     if (!_isSafeIdentifier(sessionId) || !_isSafeIdentifier(memberId)) {
       throw ArgumentError('Session and member IDs must be non-empty URL-safe IDs');
     }
-    if (!_allowedTemplates.contains(template)) {
-      throw ArgumentError.value(template, 'template', 'Unsupported VietQR template');
-    }
-
     final memo = 'CLB_${sessionId}_${memberId}';
-    final uri = Uri.https(
-      'img.vietqr.io',
-      '/image/${bankAccount.bankBin}-${bankAccount.accountNumber}-$template.png',
-      {
-        'amount': amountVnd.toString(),
-        'addInfo': memo,
-        'accountName': bankAccount.accountName.trim(),
-      },
+    final payload = EmvcoVietQr.buildPayload(
+      bankBin: bankAccount.bankBin,
+      accountNumber: bankAccount.accountNumber,
+      amount: amountVnd,
+      memo: memo,
     );
     return VietQrPaymentCode(
       amountVnd: amountVnd,
       transferMemo: memo,
-      imageUri: uri,
+      payload: payload,
     );
   }
 

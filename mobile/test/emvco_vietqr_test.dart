@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:club_squad_app/core/engine/emvco_vietqr.dart';
+import 'package:club_squad_app/services/vietqr_service.dart';
 
 void main() {
   test('CRC-16/CCITT-FALSE matches the standard check value', () {
@@ -56,6 +57,25 @@ void main() {
       ),
       throwsArgumentError,
     );
+  });
+
+  test('builds the payment payload locally with each member bill amount', () {
+    final payment = const VietQrService().createPaymentCode(
+      bankAccount: const VietQrBankAccount(
+        bankBin: '970436',
+        bankName: 'Test Bank',
+        accountNumber: '0123456789',
+        accountName: 'CLUB ACCOUNT',
+      ),
+      amountVnd: 125000,
+      sessionId: 'session-1',
+      memberId: 'member-2',
+    );
+
+    expect(payment.amountVnd, 125000);
+    expect(payment.transferMemo, 'CLB_session-1_member-2');
+    expect(payment.payload, contains('5406125000'));
+    expect(payment.payload, contains('CLB_session-1_member-2'));
   });
 }
 

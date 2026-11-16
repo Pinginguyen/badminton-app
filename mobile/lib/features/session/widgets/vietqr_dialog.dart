@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../services/vietqr_service.dart';
 import '../models/session_model.dart';
@@ -51,29 +52,12 @@ class VietQrDialog extends StatelessWidget {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(10),
-                child: Image.network(
-                  paymentCode.imageUri.toString(),
-                  width: 220,
-                  height: 220,
-                  fit: BoxFit.contain,
-                  loadingBuilder: (context, child, progress) {
-                    if (progress == null) return child;
-                    return const SizedBox(
-                      width: 220,
-                      height: 220,
-                      child: Center(child: CircularProgressIndicator()),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) => const SizedBox(
-                    width: 220,
-                    height: 220,
-                    child: Center(
-                      child: Text(
-                        'Không tải được ảnh VietQR.\nHãy thử lại khi có mạng.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
+                child: QrImageView(
+                  data: paymentCode.payload,
+                  size: 220,
+                  backgroundColor: Colors.white,
+                  errorCorrectionLevel: QrErrorCorrectLevel.M,
+                  semanticsLabel: 'Mã VietQR của ${member.displayName}',
                 ),
               ),
             ),
@@ -85,6 +69,7 @@ class VietQrDialog extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
+              '${bankAccount.bankName.isEmpty ? '' : '${bankAccount.bankName} · '}'
               '${bankAccount.accountName} · ${bankAccount.accountNumber}',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,

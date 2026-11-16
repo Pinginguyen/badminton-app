@@ -21,7 +21,9 @@ Badminton Squad là ứng dụng Flutter hỗ trợ câu lạc bộ cầu lông 
 
 ## 2. Cấu hình tài khoản nhận VietQR
 
-Thông tin người nhận hiện được truyền vào lúc chạy ứng dụng, không cần sửa mã nguồn hay đưa thông tin tài khoản vào Git. Các giá trị được đọc tại [mobile/lib/main.dart](mobile/lib/main.dart):
+Trong ứng dụng, mở biểu tượng **Cài đặt thanh toán** ở Quick Match để nhập tên ngân hàng, mã BIN VietQR 6 chữ số, số tài khoản và tên chủ tài khoản. Cấu hình được lưu cục bộ bằng SharedPreferences; mã BIN phải được xác nhận với ngân hàng. QR được tạo từ payload EMVCo ngay trên thiết bị và không cần mạng.
+
+Có thể truyền defines khi chạy để cung cấp tài khoản mặc định cho lần mở đầu tiên. Cấu hình đã lưu trong ứng dụng sẽ được ưu tiên:
 
 | Tham số | Giá trị cần nhập |
 | --- | --- |
@@ -39,7 +41,7 @@ flutter run -d chrome `
   --dart-define="VIETQR_ACCOUNT_NAME=YOUR ACCOUNT HOLDER NAME"
 ```
 
-Thêm cùng ba tham số `--dart-define` vào lệnh chạy Android ở phần dưới nếu muốn tạo VietQR trên thiết bị đó. Sau khi đổi thông tin, hãy chạy lại ứng dụng với các giá trị mới. Nếu thiếu bất kỳ giá trị nào, VietQR sẽ không được bật. Nội dung QR được tạo và vẽ ngay trên thiết bị, không cần kết nối API tạo ảnh; hãy xác minh ngân hàng, số tài khoản và tên người nhận trước khi chia sẻ.
+Các defines này là tùy chọn. Nếu không truyền chúng, nhập thông tin từ Cài đặt thanh toán sau khi mở app. Không truyền bí mật vào defines; hãy xác minh ngân hàng, số tài khoản và tên người nhận trước khi chia sẻ.
 
 ## 3. Cài Flutter và chạy ứng dụng
 

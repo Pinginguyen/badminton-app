@@ -28,6 +28,23 @@ void main() {
     expect(tester.getSize(find.byKey(const ValueKey('frame-content'))).width, 460);
   });
 
+  testWidgets('Quick Match fits a narrow phone viewport without overflow', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({});
+
+    await tester.pumpWidget(
+      const MaterialApp(home: HomeDashboardScreen()),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'Admin can add players and generate a doubles match',
     (tester) async {

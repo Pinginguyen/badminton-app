@@ -20,10 +20,14 @@ Future<void> main() async {
   final supabaseConfigured =
       _supabaseUrl.trim().isNotEmpty && _supabaseAnonKey.trim().isNotEmpty;
   if (supabaseConfigured) {
-    await Supabase.initialize(
-      url: _supabaseUrl,
-      anonKey: _supabaseAnonKey,
-    );
+    try {
+      await Supabase.initialize(
+        url: _supabaseUrl,
+        anonKey: _supabaseAnonKey,
+      );
+    } catch (error) {
+      debugPrint('Supabase initialization failed; continuing offline: $error');
+    }
   }
 
   runApp(const ClubSquadApp());

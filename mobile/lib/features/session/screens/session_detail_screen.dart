@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/utils/elo_calculator.dart';
+import '../../../core/storage/session_detail_storage.dart';
+import '../../../core/storage/vietqr_settings_store.dart';
 import '../../../services/matchmaking_service.dart';
 import '../../../services/vietqr_service.dart';
 import '../../scoreboard/models/match_score.dart';
@@ -34,18 +38,34 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   late SessionModel _session;
   late final TextEditingController _courtCostController;
   late final TextEditingController _shuttleCountController;
+  final _detailStorage = SessionDetailStorage();
   final Set<String> _finishedMatchKeys = {};
+  final Map<String, MatchScore> _matchScores = {};
+  Future<void> _writeTail = Future<void>.value();
+  VietQrBankAccount? _bankAccount;
 
   @override
   void initState() {
     super.initState();
     _session = widget.session;
+    _bankAccount = widget.bankAccount;
+    unawaited(_restorePaymentSettings());
     _courtCostController = TextEditingController(
       text: '${_session.courtRentalTotalVnd}',
     );
     _shuttleCountController = TextEditingController(
       text: '${_session.shuttlesUsed}',
     );
+    unawaited(_restoreLocalState());
+  }
+
+  Future<void> _restorePaymentSettings() async {
+    try {
+      final saved = await VietQrSettingsStore().load();
+      if (mounted && saved != null) setState(() => _bankAccount = saved);
+    } catch (_) {
+      if (mounted) _showMessage('Không thể đọc cài đặt VietQR đã lưu.');
+    }
   }
 
   @override
@@ -55,7 +75,150 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     super.dispose();
   }
 
-  void _updateSession(SessionModel updated) => setState(() => _session = updated);
+  void _updateSession(SessionModel updated) {
+    setState(() => _session = updated);
+    unawaited(_persistLocalState());
+  }
+
+  Future<void> _restoreLocalState() async {
+    try {
+      final snapshot = await _detailStorage.load(_session.id);
+      if (snapshot == null || snapshot['version'] != 1) return;
+      final savedMembers = {
+        for (final raw in _readList(snapshot, 'participants'))
+          _readString(_readMap(raw, 'participant'), 'id'):
+              _readMap(raw, 'participant'),
+      };
+      final participants = _session.participants.map((member) {
+        final saved = savedMembers[member.id];
+        if (saved == null) return member;
+        return member.copyWith(
+          eloRating: _readInt(saved, 'eloRating'),
+          attendanceWeight: _readDouble(saved, 'attendanceWeight'),
+          lateFeeVnd: _readInt(saved, 'lateFeeVnd'),
+          paymentStatus: SessionPaymentStatus.values.byName(
+            _readString(saved, 'paymentStatus'),
+          ),
+          hasReportedTransfer: _readBool(saved, 'hasReportedTransfer'),
+        );
+      }).toList(growable: false);
+      final membersById = {for (final member in participants) member.id: member};
+      final recentMatches = _readList(snapshot, 'recentMatches').map((raw) {
+        final json = _readMap(raw, 'recent match');
+        return RecentMatch(
+          matchNumber: _readInt(json, 'matchNumber'),
+          teamAPlayerIds: _readStringList(json, 'teamAPlayerIds'),
+          teamBPlayerIds: _readStringList(json, 'teamBPlayerIds'),
+          teamAWon: _readNullableBool(json, 'teamAWon'),
+        );
+      }).toList(growable: false);
+      final scheduledMatches = _readList(snapshot, 'scheduledMatches').map((raw) {
+        final json = _readMap(raw, 'scheduled match');
+        final teamA = _readStringList(json, 'teamAIds')
+            .map((id) => membersById[id]?.matchPlayer ?? _missingMember(id))
+            .toList(growable: false);
+        final teamB = _readStringList(json, 'teamBIds')
+            .map((id) => membersById[id]?.matchPlayer ?? _missingMember(id))
+            .toList(growable: false);
+        return ScheduledSessionMatch(
+          roundNumber: _readInt(json, 'roundNumber'),
+          suggestion: MatchSuggestion(
+            teamA: teamA,
+            teamB: teamB,
+            teamSkillDelta: _readInt(json, 'teamSkillDelta'),
+            repeatedPairCount: _readInt(json, 'repeatedPairCount'),
+            sessionId: _readNullableString(json, 'matchSessionId'),
+            courtNumber: _readNullableInt(json, 'courtNumber'),
+            isAdminOverride: _readBool(json, 'isAdminOverride'),
+          ),
+        );
+      }).toList(growable: false);
+      final scores = _readMap(snapshot['scores'], 'scores');
+      final restoredScores = <String, MatchScore>{
+        for (final entry in scores.entries)
+          entry.key: MatchScore.fromJson(_readMap(entry.value, 'score')),
+      };
+      final finishedKeys = _readStringList(snapshot, 'finishedMatchKeys');
+      if (!mounted) return;
+      setState(() {
+        _session = _session.copyWith(
+          courtRentalTotalVnd: _readInt(snapshot, 'courtRentalTotalVnd'),
+          shuttlesUsed: _readInt(snapshot, 'shuttlesUsed'),
+          participants: participants,
+          recentMatches: recentMatches,
+          scheduledMatches: scheduledMatches,
+        );
+        _courtCostController.text = '${_session.courtRentalTotalVnd}';
+        _shuttleCountController.text = '${_session.shuttlesUsed}';
+        _matchScores
+          ..clear()
+          ..addAll(restoredScores);
+        _finishedMatchKeys
+          ..clear()
+          ..addAll(finishedKeys);
+      });
+    } catch (error) {
+      if (mounted) _showMessage('Không thể khôi phục dữ liệu phiên: $error');
+    }
+  }
+
+  Future<void> _persistLocalState() {
+    final snapshot = <String, Object?>{
+      'version': 1,
+      'participants': [
+        for (final member in _session.participants)
+          {
+            'id': member.id,
+            'eloRating': member.eloRating,
+            'attendanceWeight': member.attendanceWeight,
+            'lateFeeVnd': member.lateFeeVnd,
+            'paymentStatus': member.paymentStatus.name,
+            'hasReportedTransfer': member.hasReportedTransfer,
+          },
+      ],
+      'recentMatches': [
+        for (final match in _session.recentMatches)
+          {
+            'matchNumber': match.matchNumber,
+            'teamAPlayerIds': match.teamAPlayerIds,
+            'teamBPlayerIds': match.teamBPlayerIds,
+            'teamAWon': match.teamAWon,
+          },
+      ],
+      'scheduledMatches': [
+        for (final match in _session.scheduledMatches)
+          {
+            'roundNumber': match.roundNumber,
+            'teamAIds': match.suggestion.teamA.map((player) => player.id).toList(),
+            'teamBIds': match.suggestion.teamB.map((player) => player.id).toList(),
+            'teamSkillDelta': match.suggestion.teamSkillDelta,
+            'repeatedPairCount': match.suggestion.repeatedPairCount,
+            'matchSessionId': match.suggestion.sessionId,
+            'courtNumber': match.suggestion.courtNumber,
+            'isAdminOverride': match.suggestion.isAdminOverride,
+          },
+      ],
+      'scores': {
+        for (final entry in _matchScores.entries) entry.key: entry.value.toJson(),
+      },
+      'finishedMatchKeys': _finishedMatchKeys.toList(),
+      'courtRentalTotalVnd': _session.courtRentalTotalVnd,
+      'shuttlesUsed': _session.shuttlesUsed,
+    };
+    final operation = _writeTail.then(
+      (_) => _detailStorage.save(_session.id, snapshot),
+    );
+    _writeTail = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return operation.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace _) {
+        if (mounted) _showMessage('Không thể tự lưu phiên: $error');
+      },
+    );
+  }
 
   void _updateMember(String memberId, SessionMember Function(SessionMember) update) {
     final participants = _session.participants
@@ -72,6 +235,75 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   void _updateShuttleCount(String value) {
     final count = int.tryParse(value) ?? 0;
     _updateSession(_session.copyWith(shuttlesUsed: count));
+  }
+
+  Future<void> _openCamera(ScheduledSessionMatch scheduledMatch) async {
+    final suggestion = scheduledMatch.suggestion;
+    final matchKey = _matchKey(scheduledMatch);
+    final score = await Navigator.of(context).push<MatchScore>(
+      MaterialPageRoute<MatchScore>(
+        builder: (_) => CameraScoreboardScreen(
+          initialScore: _matchScores[matchKey] ??
+              MatchScore.initial(
+                teamAPlayerNames: _playerNames(suggestion.teamA),
+                teamBPlayerNames: _playerNames(suggestion.teamB),
+              ),
+          onScoreChanged: (updatedScore) {
+            _matchScores[matchKey] = updatedScore;
+            unawaited(_persistLocalState());
+          },
+        ),
+      ),
+    );
+    if (!mounted || score == null) return;
+    _matchScores[matchKey] = score;
+    await _persistLocalState();
+    if (score.isMatchComplete) {
+      await _confirmMatchCompletion(scheduledMatch, score);
+    }
+  }
+
+  String _matchKey(ScheduledSessionMatch match) =>
+      '${match.roundNumber}-${match.suggestion.courtNumber ?? 0}';
+
+  Future<void> _confirmMatchCompletion(
+    ScheduledSessionMatch scheduledMatch,
+    MatchScore score,
+  ) async {
+    if (!widget.isAdmin) return;
+    if (_finishedMatchKeys.contains(_matchKey(scheduledMatch))) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Xác nhận kết thúc trận?'),
+        content: Text(
+          'Đôi A ${score.teamASetsWon} - ${score.teamBSetsWon} Đôi B. '
+          'Kết quả và Elo sẽ được lưu trên thiết bị.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Kiểm tra lại'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Chốt kết quả'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    final signedMargin = score.sets.fold<int>(
+      0,
+      (total, set) => total + set.teamA - set.teamB,
+    );
+    await _applyMatchResult(
+      scheduledMatch,
+      _MatchResult(
+        teamAWon: score.teamASetsWon > score.teamBSetsWon,
+        pointMargin: signedMargin.abs(),
+      ),
+    );
   }
 
   void _generateMatches() {
@@ -107,18 +339,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     _updateSession(_session.copyWith(scheduledMatches: generated));
   }
 
-  void _openCamera(MatchSuggestion suggestion) {
-    final score = MatchScore.initial(
-      teamAPlayerNames: _playerNames(suggestion.teamA),
-      teamBPlayerNames: _playerNames(suggestion.teamB),
-    );
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => CameraScoreboardScreen(initialScore: score),
-      ),
-    );
-  }
-
   List<String> _playerNames(List<MatchPlayer> players) {
     return players
         .map(
@@ -145,6 +365,19 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     );
     if (!mounted || result == null) return;
 
+    await _applyMatchResult(scheduledMatch, result);
+  }
+
+  Future<void> _applyMatchResult(
+    ScheduledSessionMatch scheduledMatch,
+    _MatchResult result,
+  ) async {
+    final suggestion = scheduledMatch.suggestion;
+    final matchKey = _matchKey(scheduledMatch);
+    if (_finishedMatchKeys.contains(matchKey)) {
+      _showMessage('Trận đấu này đã được chốt Elo.');
+      return;
+    }
     final teamA = suggestion.teamA
         .map(
           (player) => _session.participants
@@ -198,6 +431,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         matchNumber: nextMatchNumber,
         teamAPlayerIds: suggestion.teamA.map((player) => player.id).toList(),
         teamBPlayerIds: suggestion.teamB.map((player) => player.id).toList(),
+        teamAWon: result.teamAWon,
       ),
     ];
 
@@ -208,6 +442,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         recentMatches: updatedHistory,
       );
     });
+    await _persistLocalState();
 
     final highestIncrease =
         changes.map((change) => change.delta).reduce((a, b) => a > b ? a : b);
@@ -238,7 +473,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
   Future<void> _openPaymentDialog(SessionMember member) async {
     try {
       final bill = _session.billFor(member);
-      final bankAccount = widget.bankAccount;
+      final bankAccount = _bankAccount;
       if (bankAccount == null) {
         _showMessage('Chưa cấu hình tài khoản nhận VietQR.');
         return;
@@ -344,7 +579,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
               isCompleted: _finishedMatchKeys.contains(
                 '${match.roundNumber}-${match.suggestion.courtNumber ?? 0}',
               ),
-              onOpenCamera: () => _openCamera(match.suggestion),
+              onOpenCamera: () => _openCamera(match),
               onFinishMatch: () => _finishMatch(match),
             ),
       ],
@@ -358,26 +593,37 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
       children: [
         _SessionSummary(session: _session),
         const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: _CostInput(
-                label: 'Tổng tiền sân (₫)',
-                controller: _courtCostController,
-                enabled: widget.isAdmin,
-                onChanged: _updateCourtCost,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _CostInput(
-                label: 'Số quả cầu đã đánh',
-                controller: _shuttleCountController,
-                enabled: widget.isAdmin,
-                onChanged: _updateShuttleCount,
-              ),
-            ),
-          ],
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final courtCost = _CostInput(
+              label: 'Tổng tiền sân (₫)',
+              controller: _courtCostController,
+              enabled: widget.isAdmin,
+              onChanged: _updateCourtCost,
+            );
+            final shuttleCount = _CostInput(
+              label: 'Số quả cầu đã đánh',
+              controller: _shuttleCountController,
+              enabled: widget.isAdmin,
+              onChanged: _updateShuttleCount,
+            );
+            if (constraints.maxWidth < 390) {
+              return Column(
+                children: [
+                  courtCost,
+                  const SizedBox(height: 10),
+                  shuttleCount,
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: courtCost),
+                const SizedBox(width: 12),
+                Expanded(child: shuttleCount),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 8),
         Text(
@@ -385,7 +631,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           'Tổng cầu: ${formatVnd(_session.shuttlesUsed * _session.shuttleUnitPriceVnd)}',
           style: Theme.of(context).textTheme.bodySmall,
         ),
-        if (widget.bankAccount == null)
+        if (_bankAccount == null)
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Text(
@@ -410,7 +656,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
               member: member,
               bill: _session.billFor(member),
               isAdmin: widget.isAdmin,
-              canShowQr: widget.bankAccount != null,
+              canShowQr: _bankAccount != null,
               onLateChanged: (isLate) => _updateMember(
                 member.id,
                 (current) =>
@@ -924,4 +1170,76 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+Map<String, Object?> _readMap(Object? value, String field) {
+  if (value is! Map || value.keys.any((key) => key is! String)) {
+    throw FormatException('Saved $field must be an object.');
+  }
+  return value.cast<String, Object?>();
+}
+
+List<Object?> _readList(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! List) throw FormatException('Saved $field must be a list.');
+  return value.cast<Object?>();
+}
+
+List<String> _readStringList(Map<String, Object?> json, String field) {
+  final values = _readList(json, field);
+  if (values.any((value) => value is! String)) {
+    throw FormatException('Saved $field must contain text values.');
+  }
+  return values.cast<String>();
+}
+
+String _readString(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! String) throw FormatException('Saved $field must be text.');
+  return value;
+}
+
+String? _readNullableString(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value == null) return null;
+  if (value is! String) throw FormatException('Saved $field must be text.');
+  return value;
+}
+
+int _readInt(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! int) throw FormatException('Saved $field must be an integer.');
+  return value;
+}
+
+int? _readNullableInt(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value == null) return null;
+  if (value is! int) {
+    throw FormatException('Saved $field must be an integer.');
+  }
+  return value;
+}
+
+double _readDouble(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! num) throw FormatException('Saved $field must be numeric.');
+  return value.toDouble();
+}
+
+bool _readBool(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! bool) throw FormatException('Saved $field must be boolean.');
+  return value;
+}
+
+bool? _readNullableBool(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value == null) return null;
+  if (value is! bool) throw FormatException('Saved $field must be boolean.');
+  return value;
+}
+
+MatchPlayer _missingMember(String id) {
+  throw FormatException('Saved match refers to unknown member "$id".');
 }

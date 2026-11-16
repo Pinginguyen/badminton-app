@@ -141,6 +141,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
                 children: [
                   DropdownButtonFormField<String>(
                     value: _selectedOpponentId,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Chọn đối thủ',
                       prefixIcon: Icon(Icons.person_search),
@@ -152,6 +153,8 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
                             value: candidate.id,
                             child: Text(
                               '${candidate.displayName} · ELO ${candidate.eloRating}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         )

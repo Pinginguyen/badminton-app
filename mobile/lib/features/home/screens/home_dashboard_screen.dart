@@ -7,6 +7,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../core/engine/emvco_vietqr.dart';
 import '../../../core/storage/local_storage_service.dart';
+import '../../../core/storage/vietqr_settings_store.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/ui/bouncy_pressable.dart';
 import '../../../core/ui/glass_container.dart';
@@ -14,6 +15,7 @@ import '../../../services/matchmaking_service.dart';
 import '../../../services/vietqr_service.dart';
 import '../../scoreboard/models/match_score.dart';
 import '../../scoreboard/screens/camera_scoreboard_screen.dart';
+import '../../settings/screens/payment_settings_screen.dart';
 import '../../session/models/session_model.dart';
 
 class HomeDashboardScreen extends StatefulWidget {
@@ -50,6 +52,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   int _roundNumber = 0;
   int _roundRecentStartIndex = 0;
   int _nextPlayerId = 0;
+  VietQrBankAccount? _bankAccount;
   bool _isLoading = true;
   bool _storageErrorShown = false;
   String? _loadError;
@@ -57,7 +60,9 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    _bankAccount = widget.bankAccount;
     unawaited(_restoreState());
+    unawaited(_restorePaymentSettings());
   }
 
   @override
@@ -615,7 +620,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
   }
 
   void _openQr(SessionModel session, SessionMember member, SessionBill bill) {
-    final bankAccount = widget.bankAccount;
+    final bankAccount = _bankAccount;
     if (bankAccount == null) {
       _showMessage('Cấu hình tài khoản ngân hàng để tạo VietQR.');
       return;
@@ -642,6 +647,24 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
     } on ArgumentError catch (error) {
       _showMessage('Không thể tạo VietQR: ${error.message}');
     }
+  }
+
+  Future<void> _restorePaymentSettings() async {
+    try {
+      final saved = await VietQrSettingsStore().load();
+      if (mounted && saved != null) setState(() => _bankAccount = saved);
+    } catch (_) {
+      if (mounted) _showMessage('Không thể đọc cài đặt VietQR đã lưu.');
+    }
+  }
+
+  Future<void> _openPaymentSettings() async {
+    final account = await Navigator.of(context).push<VietQrBankAccount>(
+      MaterialPageRoute(
+        builder: (_) => PaymentSettingsScreen(initialAccount: _bankAccount),
+      ),
+    );
+    if (mounted && account != null) setState(() => _bankAccount = account);
   }
 
   void _showMessage(String message) {
@@ -752,6 +775,11 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
         ],
       ),
       actions: [
+        IconButton(
+          tooltip: 'Cài đặt thanh toán',
+          onPressed: _openPaymentSettings,
+          icon: const Icon(Icons.settings_outlined),
+        ),
         _AdminBadge(isAdmin: widget.isAdmin),
         const SizedBox(width: 14),
       ],
@@ -768,29 +796,44 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
           subtitle: 'Nhập tên hoặc dán danh sách, ngăn cách bằng dấu phẩy',
         ),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _nameController,
-                enabled: widget.isAdmin,
-                textCapitalization: TextCapitalization.words,
-                textInputAction: TextInputAction.done,
-                onSubmitted: _addPlayers,
-                decoration: const InputDecoration(
-                  hintText: 'Nam, Tuấn, Hoàng, Minh...',
-                  prefixIcon: Icon(Icons.person_add_alt_1),
-                  isDense: true,
-                ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final input = TextField(
+              controller: _nameController,
+              enabled: widget.isAdmin,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.done,
+              onSubmitted: _addPlayers,
+              decoration: const InputDecoration(
+                hintText: 'Nam, Tuấn, Hoàng, Minh...',
+                prefixIcon: Icon(Icons.person_add_alt_1),
+                isDense: true,
               ),
-            ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed:
-                  widget.isAdmin ? () => _addPlayers(_nameController.text) : null,
-              child: const Text('Thêm'),
-            ),
-          ],
+            );
+            final addButton = SizedBox(
+              height: 48,
+              child: FilledButton(
+                onPressed: widget.isAdmin
+                    ? () => _addPlayers(_nameController.text)
+                    : null,
+                child: const Text('Thêm'),
+              ),
+            );
+
+            if (constraints.maxWidth < 360) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [input, const SizedBox(height: 8), addButton],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: input),
+                const SizedBox(width: 8),
+                addButton,
+              ],
+            );
+          },
         ),
         const SizedBox(height: 10),
         if (_players.isEmpty)
@@ -1053,7 +1096,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
             _BillTile(
               member: session.participants[index],
               bill: bills[index],
-              canOpenQr: widget.bankAccount != null &&
+              canOpenQr: _bankAccount != null &&
                   bills[index].totalAmountVnd > 0,
               onOpenQr: () => _openQr(
                 session,
@@ -1062,7 +1105,7 @@ class _HomeDashboardScreenState extends State<HomeDashboardScreen> {
               ),
             ),
         ],
-        if (widget.bankAccount == null)
+        if (_bankAccount == null)
           Padding(
             padding: const EdgeInsets.only(top: 10),
             child: Text(
@@ -1375,7 +1418,6 @@ class _PlayerTile extends StatelessWidget {
                 ),
                 IconButton(
                   onPressed: isAdmin ? onRemove : null,
-                  visualDensity: VisualDensity.compact,
                   tooltip: 'Xóa người chơi',
                   icon: const Icon(Icons.close, size: 18),
                 ),
@@ -1392,9 +1434,11 @@ class _PlayerTile extends StatelessWidget {
                     onSelected: !isAdmin || player.skillLevel == level.$1
                         ? null
                         : (_) => onSkillChanged(level.$1),
-                    visualDensity: VisualDensity.compact,
-                    labelStyle: const TextStyle(fontSize: 10),
-                    padding: EdgeInsets.zero,
+                    labelStyle: const TextStyle(fontSize: 11),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
                   ),
               ],
             ),
@@ -1973,6 +2017,7 @@ class _PaymentQrDialog extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Text(
+              '${bankAccount.bankName.isEmpty ? '' : '${bankAccount.bankName}\n'}'
               '${bankAccount.accountName}\n${bankAccount.accountNumber}',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,

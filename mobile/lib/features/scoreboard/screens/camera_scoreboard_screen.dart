@@ -390,6 +390,17 @@ class _CameraScoreboardScreenState extends State<CameraScoreboardScreen>
                           _cameraController?.value.isInitialized == true,
                       onPressed: _toggleRecording,
                     ),
+                    if (_score.isMatchComplete) ...[
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        height: 54,
+                        child: FilledButton.icon(
+                          onPressed: () => Navigator.of(context).pop(_score),
+                          icon: const Icon(Icons.check_circle_outline),
+                          label: const Text('XÁC NHẬN KẾT THÚC'),
+                        ),
+                      ),
+                    ],
                     if (_lastVideoPath != null) ...[
                       const SizedBox(height: 6),
                       const Text(
